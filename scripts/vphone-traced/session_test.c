@@ -68,12 +68,17 @@ struct source {
     pthread_mutex_t lock;
     long produced;          // number of events handed to the session
     int target_every;       // every Nth event belongs to the target
+    long cap;               // 0 = unlimited; else stop after this many
     int stop;
 };
 
 static int source_next(void *ctx, vt_event *out) {
     struct source *src = ctx;
     pthread_mutex_lock(&src->lock);
+    if (src->cap > 0 && src->produced >= src->cap) {
+        pthread_mutex_unlock(&src->lock);
+        return 0; // capped: starve until the next round resets the cap
+    }
     long n = src->produced++;
     pthread_mutex_unlock(&src->lock);
 
@@ -294,11 +299,17 @@ int main(void) {
         vt_session_destroy(s);
     }
 
-    // ── re-arm after stop: session is reusable across relaunches ──────
+    // ── re-arm after stop: reusable + fresh pre-roll (deterministic) ──
     {
+        // Capped source: round 1 produces exactly 8 events (4 target), the
+        // ring is 256 — far larger, so NOTHING wraps and round-1 events can
+        // only be evicted by vt_ring_reset. This makes the reset observable:
+        // without reset, round-2 replay would include round-1 target events
+        // (sequences 1,3,5,7); with reset, replay is exactly the 4 round-2
+        // target events (sequences 9,11,13,15).
         struct collector col = { .lock = PTHREAD_MUTEX_INITIALIZER };
         struct source src = { .lock = PTHREAD_MUTEX_INITIALIZER,
-                              .target_every = 2 };
+                              .target_every = 2, .cap = 8 };
         vt_session_config cfg = {
             .ring_capacity = 256,
             .source = source_next, .source_ctx = &src,
@@ -308,30 +319,36 @@ int main(void) {
         vt_session *s = NULL;
         assert(vt_session_create(&s, &cfg) == 0);
 
-        // Round 1: arm → produce → stop.
+        // Round 1: arm → produce exactly 8 events → stop.
         assert(vt_session_arm(s) == 0);
-        for (int i = 0; i < 2000 && vt_session_sequence(s) < 10; i++) {
+        for (int i = 0; i < 2000 && vt_session_sequence(s) < 8; i++) {
             usleep(2000);
         }
-        assert(vt_session_sequence(s) >= 10);
+        assert(vt_session_sequence(s) == 8); // cap enforced: exactly 8
+        uint64_t seq_after_r1 = vt_session_sequence(s);
         vt_session_stop(s);
         assert(vt_session_state_get(s) == VT_SESS_IDLE);
 
         pthread_mutex_lock(&col.lock);
-        long frames_r1 = col.frame_count;
+        long frames_r1 = col.frame_count;   // ready + stopped from round 1
         pthread_mutex_unlock(&col.lock);
 
         // Round 2: re-arm must respawn the pump, reach READY again, and —
-        // critically — start with a FRESH pre-roll: round-1 events must
-        // never leak into a round-2 replay. The sequence counter is global
-        // (never reset), so wait for the round-2 READY frame itself.
+        // critically — start with a FRESH pre-roll. Round 2's cap window is
+        // events 9..16 (the source cap is raised by produced count, so
+        // bump it to 16 for the second round).
         assert(vt_session_arm(s) == 0);
         assert(vt_session_state_get(s) == VT_SESS_ARMED);
+        pthread_mutex_lock(&src.lock);
+        src.cap = 16;
+        pthread_mutex_unlock(&src.lock);
+
+        // Wait for the round-2 READY frame (it is frames_r1 index).
         for (int i = 0; i < 2000; i++) {
             pthread_mutex_lock(&col.lock);
             long fc = col.frame_count;
             pthread_mutex_unlock(&col.lock);
-            if (fc > frames_r1) break;  // round-2 ready landed
+            if (fc > frames_r1) break;
             usleep(2000);
         }
         pthread_mutex_lock(&col.lock);
@@ -339,27 +356,27 @@ int main(void) {
         assert(strstr(col.frames[frames_r1], "{\"type\":\"ready\""));
         pthread_mutex_unlock(&col.lock);
 
-        // Give the respawned pump a beat, then confirm it produces.
-        uint64_t seq_before = vt_session_sequence(s);
-        usleep(100000);
-        assert(vt_session_sequence(s) > seq_before);
+        // Wait until the pump consumed the 8 round-2 events (sequence 16).
+        for (int i = 0; i < 2000 && vt_session_sequence(s) < 16; i++) {
+            usleep(2000);
+        }
+        assert(vt_session_sequence(s) == 16); // exactly 8 more produced
 
-        // Round-2 bind: replay must contain ONLY round-2 events. Round-1
-        // events had sequences <= seq_at_r1_stop; round-2 replayed events
-        // must all be newer. Bound to the target, then check.
-        uint64_t seq_before_bind = vt_session_sequence(s);
+        // Round-2 bind: with ring reset, replay = round-2 target events
+        // only (4 of them: global sequences 9,11,13,15). Without reset, the
+        // ring would still hold all 8 round-1 events (256 >> 8, no wrap)
+        // and replay would be 8 target events — the assertion below fails.
         assert(vt_session_bind(s, TARGET_PID) == 0);
         pthread_mutex_lock(&col.lock);
         long r2_replay = col.replay_count;
-        assert(r2_replay > 0);
+        assert(r2_replay == 4);
         for (long i = 0; i < col.count; i++) {
             if (col.phases[i] != VT_PHASE_REPLAY) continue;
-            // A round-1 event would have a sequence at or below round-1's
-            // stop watermark; every round-2 replay is newer than the
-            // pre-re-arm watermark.
-            assert(col.events[i].sequence > seq_before);
+            // Round-1 target events were sequences 1,3,5,7 — all <= 8.
+            // Round-2 replays must be strictly beyond the round-1 stop.
+            assert(col.events[i].sequence > seq_after_r1);
+            assert(col.events[i].sequence > 8);
         }
-        (void)seq_before_bind;
         pthread_mutex_unlock(&col.lock);
 
         vt_session_stop(s);

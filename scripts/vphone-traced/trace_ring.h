@@ -30,8 +30,11 @@ int vt_ring_init(vt_ring *ring, uint64_t capacity);
 /// Free ring storage; safe to call twice.
 void vt_ring_destroy(vt_ring *ring);
 
-/// Assign the next sequence number and append. Overwrites the oldest entry
-/// once full, incrementing `wrapped`. Single-writer only (the reader thread).
+/// Append an event. Sequence ownership: if the caller pre-stamped
+/// `event->sequence` (nonzero — the session pump stamps under its own lock),
+/// the ring keeps it and mirrors it; only unstamped events (sequence == 0)
+/// get the next ring-local sequence. Overwrites the oldest entry once full,
+/// incrementing `wrapped`. Single-writer only (the reader thread).
 void vt_ring_push(vt_ring *ring, vt_event *event);
 
 /// Number of events currently retained (never exceeds capacity).

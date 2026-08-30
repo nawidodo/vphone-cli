@@ -118,8 +118,13 @@ is deliberately **not** reset (monotonic across the process lifetime), so
 event identities stay unique across relaunches; the ring's sequence mirror
 is aligned to the session watermark at reset. `vt_ring_push` honors a
 pre-stamped sequence (session pump) and only assigns ring-local sequences
-for unstamped events. The harness asserts round-2 replay contains only
-events newer than the re-arm watermark.
+for unstamped events. The harness proves reset **deterministically**: a capped source produces
+exactly 8 events in round 1 (ring 256 — no wrap possible), then exactly 8
+more in round 2. Without `vt_ring_reset`, round-2 replay would contain all
+8 round-1 target events; with it, replay is exactly the 4 round-2 target
+events (`replayed == 4`, every replayed sequence > round-1 stop watermark).
+The assertion `r2_replay == 4` fails on any reset regression — no timing
+dependence, no wrap-evection ambiguity.
 - `{"type":"trace_drop"}` — surfaced when the source reports kernel drops.
 
 ---
