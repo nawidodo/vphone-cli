@@ -193,12 +193,31 @@ int vt_session_arm(vt_session *s) {
     int rc = 0;
     pthread_mutex_lock(&s->lock);
     if (s->state != VT_SESS_IDLE) {
-        rc = -EINVAL;
-    } else {
-        s->state = VT_SESS_ARMED;
-        s->ready_sent = 0;
-        s->ring.wrapped = 0;
+        pthread_mutex_unlock(&s->lock);
+        return -EINVAL;
     }
+
+    // Re-arm after stop(): the pump thread exited on shutdown, so respawn
+    // it. From the caller's view the session is reusable IDLE → ARMED → …
+    // → IDLE for its whole lifetime (blueprint §6: relaunches are in scope).
+    if (!s->pump_running) {
+        s->stop_requested = 0;
+        s->ready_sent = 0;
+        s->pump_running = 1;
+        if (pthread_create(&s->pump_thread, NULL, pump_main, s) != 0) {
+            s->pump_running = 0;
+            rc = -errno;
+            pthread_mutex_unlock(&s->lock);
+            return rc;
+        }
+    }
+    s->state = VT_SESS_ARMED;
+    s->ready_sent = 0;
+    // Fresh pre-roll per launch: stale round-1 events must never leak into
+    // a round-2 replay. Reset under the ring's own lock; the global session
+    // sequence is NOT reset (monotonic across the process lifetime), so the
+    // ring's last-assigned-sequence mirror is aligned to it.
+    vt_ring_reset(&s->ring, s->sequence);
     pthread_cond_broadcast(&s->pump_cond);
     pthread_mutex_unlock(&s->lock);
     return rc;

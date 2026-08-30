@@ -294,6 +294,79 @@ int main(void) {
         vt_session_destroy(s);
     }
 
+    // ── re-arm after stop: session is reusable across relaunches ──────
+    {
+        struct collector col = { .lock = PTHREAD_MUTEX_INITIALIZER };
+        struct source src = { .lock = PTHREAD_MUTEX_INITIALIZER,
+                              .target_every = 2 };
+        vt_session_config cfg = {
+            .ring_capacity = 256,
+            .source = source_next, .source_ctx = &src,
+            .sink = collect_event, .sink_ctx = &col,
+            .frame = collect_frame, .frame_ctx = &col,
+        };
+        vt_session *s = NULL;
+        assert(vt_session_create(&s, &cfg) == 0);
+
+        // Round 1: arm → produce → stop.
+        assert(vt_session_arm(s) == 0);
+        for (int i = 0; i < 2000 && vt_session_sequence(s) < 10; i++) {
+            usleep(2000);
+        }
+        assert(vt_session_sequence(s) >= 10);
+        vt_session_stop(s);
+        assert(vt_session_state_get(s) == VT_SESS_IDLE);
+
+        pthread_mutex_lock(&col.lock);
+        long frames_r1 = col.frame_count;
+        pthread_mutex_unlock(&col.lock);
+
+        // Round 2: re-arm must respawn the pump, reach READY again, and —
+        // critically — start with a FRESH pre-roll: round-1 events must
+        // never leak into a round-2 replay. The sequence counter is global
+        // (never reset), so wait for the round-2 READY frame itself.
+        assert(vt_session_arm(s) == 0);
+        assert(vt_session_state_get(s) == VT_SESS_ARMED);
+        for (int i = 0; i < 2000; i++) {
+            pthread_mutex_lock(&col.lock);
+            long fc = col.frame_count;
+            pthread_mutex_unlock(&col.lock);
+            if (fc > frames_r1) break;  // round-2 ready landed
+            usleep(2000);
+        }
+        pthread_mutex_lock(&col.lock);
+        assert(col.frame_count > frames_r1);
+        assert(strstr(col.frames[frames_r1], "{\"type\":\"ready\""));
+        pthread_mutex_unlock(&col.lock);
+
+        // Give the respawned pump a beat, then confirm it produces.
+        uint64_t seq_before = vt_session_sequence(s);
+        usleep(100000);
+        assert(vt_session_sequence(s) > seq_before);
+
+        // Round-2 bind: replay must contain ONLY round-2 events. Round-1
+        // events had sequences <= seq_at_r1_stop; round-2 replayed events
+        // must all be newer. Bound to the target, then check.
+        uint64_t seq_before_bind = vt_session_sequence(s);
+        assert(vt_session_bind(s, TARGET_PID) == 0);
+        pthread_mutex_lock(&col.lock);
+        long r2_replay = col.replay_count;
+        assert(r2_replay > 0);
+        for (long i = 0; i < col.count; i++) {
+            if (col.phases[i] != VT_PHASE_REPLAY) continue;
+            // A round-1 event would have a sequence at or below round-1's
+            // stop watermark; every round-2 replay is newer than the
+            // pre-re-arm watermark.
+            assert(col.events[i].sequence > seq_before);
+        }
+        (void)seq_before_bind;
+        pthread_mutex_unlock(&col.lock);
+
+        vt_session_stop(s);
+        assert(vt_session_state_get(s) == VT_SESS_IDLE);
+        vt_session_destroy(s);
+    }
+
     printf("session_test: all assertions passed\n");
     return 0;
 }

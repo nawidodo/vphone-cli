@@ -37,6 +37,12 @@ void vt_ring_push(vt_ring *ring, vt_event *event);
 /// Number of events currently retained (never exceeds capacity).
 uint64_t vt_ring_count(const vt_ring *ring);
 
+/// Drop all retained events and restore the ring to empty. `sequence_base`
+/// is the session's current sequence watermark: the ring's own sequence
+/// mirror is set to it so pushes continue the global numbering. The caller
+/// must hold no ring-internal expectations; the ring takes its own lock.
+void vt_ring_reset(vt_ring *ring, uint64_t sequence_base);
+
 /// Invoke `fn` over retained events ordered oldest → newest. The ring takes
 /// its own lock: each event is copied out before the callback runs, so the
 /// callback observes a stable snapshot and may take other locks freely.

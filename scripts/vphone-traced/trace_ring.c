@@ -38,9 +38,14 @@ void vt_ring_destroy(vt_ring *ring) {
 
 void vt_ring_push(vt_ring *ring, vt_event *event) {
     pthread_mutex_lock(&ring->lock);
-    uint64_t seq = ring->sequence + 1;
-    event->sequence = seq;
-    ring->sequence = seq;
+
+    // Sequence ownership: if the event arrives with a sequence already
+    // stamped (session pump stamps under its own lock), keep it and mirror
+    // it; only assign the next ring-local sequence when unset (0).
+    if (event->sequence == 0) {
+        event->sequence = ring->sequence + 1;
+    }
+    ring->sequence = event->sequence;
 
     uint64_t slot = ring->write_index & ring->mask;
     ring->events[slot] = *event;
@@ -57,6 +62,14 @@ uint64_t vt_ring_count(const vt_ring *ring) {
     uint64_t total = ring->write_index;
     pthread_mutex_unlock(&((vt_ring *)ring)->lock);
     return total > ring->capacity ? ring->capacity : total;
+}
+
+void vt_ring_reset(vt_ring *ring, uint64_t sequence_base) {
+    pthread_mutex_lock(&ring->lock);
+    ring->write_index = 0;
+    ring->sequence = sequence_base;
+    ring->wrapped = 0;
+    pthread_mutex_unlock(&ring->lock);
 }
 
 /// Visit takes the ring lock and copies each retained event out before

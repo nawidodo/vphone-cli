@@ -107,6 +107,19 @@ the bound frame, tagged `REPLAY`.
 - `{"type":"bound","pid":P,"replayed":N,"wrapped":W}` — N is the exact
   replay size, W the pre-roll wrap count (feeds the §16 host warning).
 - `{"type":"stopped"}` — after stop; guest is back in IDLE.
+
+## 1.7 Re-arm after stop (blueprint §6 relaunches)
+
+`stop()` joins the pump and returns to IDLE; the session is **reusable**.
+`arm()` on a stopped session respawns the pump thread and resets the
+pre-roll ring (`vt_ring_reset(ring, session_sequence)`) — stale round-1
+events can never leak into a round-2 replay. The global `sequence` counter
+is deliberately **not** reset (monotonic across the process lifetime), so
+event identities stay unique across relaunches; the ring's sequence mirror
+is aligned to the session watermark at reset. `vt_ring_push` honors a
+pre-stamped sequence (session pump) and only assigns ring-local sequences
+for unstamped events. The harness asserts round-2 replay contains only
+events newer than the re-arm watermark.
 - `{"type":"trace_drop"}` — surfaced when the source reports kernel drops.
 
 ---
