@@ -33,6 +33,10 @@ let package = Package(
                 .linkedFramework("Virtualization"),
             ]
         ),
+        .target(
+            name: "VPhoneTrace",
+            path: "sources/VPhoneTrace"
+        ),
         .executableTarget(
             name: "vphone-cli",
             dependencies: [
@@ -40,6 +44,7 @@ let package = Package(
                 .product(name: "Dynamic", package: "Dynamic"),
                 "FirmwarePatcher",
                 "VPhoneCore",
+                "VPhoneTrace",
             ],
             path: "sources/vphone-cli",
             linkerSettings: [
@@ -59,6 +64,11 @@ let package = Package(
             name: "VPhoneCoreTests",
             dependencies: ["VPhoneCore"],
             path: "tests/VPhoneCoreTests"
+        ),
+        .testTarget(
+            name: "VPhoneTraceTests",
+            dependencies: ["VPhoneTrace"],
+            path: "tests/VPhoneTraceTests"
         ),
     ]
 )

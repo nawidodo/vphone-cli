@@ -1,0 +1,6 @@
+{"protocol":1,"event":"syscall","sequence":1,"timestamp":12340001,"pid":0,"tid":129,"kind":"bsd","phase":"entry","number":5}
+{"protocol":1,"event":"syscall","sequence":2,"timestamp":12340005,"pid":843,"tid":129,"kind":"bsd","phase":"exit","number":5}
+{"protocol":1,"event":"syscall","sequence":3,"timestamp":12340009,"pid":843,"tid":129,"kind":"bsd","phase":"exit","number":6}
+{"protocol":1,"event":"syscall","sequence":4,"timestamp":12340012,"pid":0,"tid":129,"kind":"mach","phase":"entry","number":10}
+{"protocol":1,"event":"syscall","sequence":5,"timestamp":12340020,"pid":843,"tid":153,"kind":"meta","phase":"none","number":-1}
+{"protocol":1,"event":"trace_drop","count":1,"timestamp":12340030}

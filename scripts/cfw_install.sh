@@ -560,6 +560,35 @@ done
 cp -R "$VPHONED_SRC/vphoned.plist" "$MNT1/System/Library/LaunchDaemons/"
 /bin/chmod 0644 $MNT1/System/Library/LaunchDaemons/vphoned.plist
 
+# Install vphone-traced (raw syscall trace reader, stage 2). Built on demand
+# like vphoned; keep-alive off — the analyst starts it over SSH/vsock.
+TRACED_SRC="$SCRIPT_DIR/vphone-traced"
+TRACED_BIN="$TRACED_SRC/vphone-traced"
+TRACED_SRCS=("$TRACED_SRC"/*.c)
+needs_traced_build=0
+if [[ ! -f "$TRACED_BIN" ]]; then
+    needs_traced_build=1
+else
+    for src in "${TRACED_SRCS[@]}" "${TRACED_SRC}"/trace_*.h; do
+        if [[ "$src" -nt "$TRACED_BIN" ]]; then
+            needs_traced_build=1
+            break
+        fi
+    done
+fi
+if [[ "$needs_traced_build" == "1" ]]; then
+    echo "  Building vphone-traced for arm64..."
+    xcrun -sdk iphoneos clang -arch arm64 -Os -Wall -Wextra -Werror \
+        -I"$TRACED_SRC" \
+        -o "$TRACED_BIN" "${TRACED_SRCS[@]}"
+fi
+ldid -S"$TRACED_SRC/entitlements.plist" "$TRACED_BIN"
+cp -R "$TRACED_BIN" "$MNT1/usr/bin/vphone-traced"
+/bin/chmod 0755 $MNT1/usr/bin/vphone-traced
+cp -R "$TRACED_SRC/vphone-traced.plist" "$MNT1/System/Library/LaunchDaemons/"
+/bin/chmod 0644 $MNT1/System/Library/LaunchDaemons/vphone-traced.plist
+echo "  [+] vphone-traced installed (run: ssh root@vm /usr/bin/vphone-traced)"
+
 # Always patch launchd.plist from .bak (original)
 echo "  Patching launchd.plist..."
 if ! [[ -e "$MNT1/System/Library/xpc/launchd.plist.bak" ]]; then

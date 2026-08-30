@@ -249,6 +249,20 @@ vphoned:
 		$(VM_DIR)/.vphoned.signed
 	@echo "  signed → $(VM_DIR)/.vphoned.signed"
 
+# Cross-compile + sign vphone-traced raw syscall trace reader (stage 2).
+# Pure C, no frameworks; installs into the guest as /usr/bin/vphone-traced.
+.PHONY: vphone-traced
+vphone-traced:
+	@command -v ldid >/dev/null 2>&1 \
+		|| (echo "Error: ldid not found. Run: brew install ldid-procursus" && exit 1)
+	$(MAKE) -C $(SCRIPTS)/vphone-traced GIT_HASH=$(GIT_HASH)
+	@echo "=== Signing vphone-traced ==="
+	mkdir -p $(VM_DIR)
+	ldid -S$(SCRIPTS)/vphone-traced/entitlements.plist \
+		$(SCRIPTS)/vphone-traced/vphone-traced
+	cp $(SCRIPTS)/vphone-traced/vphone-traced $(VM_DIR)/.vphone-traced.signed
+	@echo "  signed → $(VM_DIR)/.vphone-traced.signed"
+
 # ═══════════════════════════════════════════════════════════════════
 # VM management
 # ═══════════════════════════════════════════════════════════════════

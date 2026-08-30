@@ -1,0 +1,4 @@
+
+# native harness binaries
+*.out
+*.dSYM/
